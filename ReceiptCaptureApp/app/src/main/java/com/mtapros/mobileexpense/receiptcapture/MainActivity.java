@@ -9,7 +9,6 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -19,16 +18,16 @@ import android.widget.Toast;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.URI;
-import java.net.URL;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Locale;
 import java.util.UUID;
@@ -134,7 +133,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String validatedServerBaseUrl() throws Exception {
+    private LocalServer validatedServer() throws Exception {
         String value = serverUrlEditText.getText().toString().trim();
         if (value.isEmpty()) {
             value = DEFAULT_SERVER_URL;
@@ -153,7 +152,7 @@ public class MainActivity extends Activity {
             throw new Exception("Server URL must point to a local/private network address.");
         }
         int port = uri.getPort() == -1 ? 8000 : uri.getPort();
-        return new URI("http", null, uri.getHost(), port, "", null, null).toString().replaceAll("/$", "");
+        return new LocalServer(uri.getHost(), port);
     }
 
     private boolean isLocalNetworkHost(String host) {
@@ -169,38 +168,25 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    @SuppressWarnings("java/ssrf")
     private void checkServerHealth() {
         setBusy(true, "Checking exp6.py server...");
         executor.execute(() -> {
-            HttpURLConnection connection = null;
             try {
-                URL url = new URL(validatedServerBaseUrl() + "/health");
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(5000);
-                connection.setReadTimeout(10000);
-                int code = connection.getResponseCode();
-                String response = readResponse(connection, code);
-                if (code < 200 || code >= 300) {
-                    throw new Exception("HTTP " + code + ": " + response);
+                HttpResult response = sendHttpRequest(validatedServer(), "GET", "/health", null, null, 5000, 10000);
+                if (response.statusCode < 200 || response.statusCode >= 300) {
+                    throw new Exception("HTTP " + response.statusCode + ": " + response.body);
                 }
                 runOnUiThread(() -> {
-                    resultTextView.setText(response);
+                    resultTextView.setText(response.body);
                     showStatus("exp6.py server is reachable.");
                     setBusy(false, null);
                 });
             } catch (Exception e) {
                 showError("Server check failed", e);
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
             }
         });
     }
 
-    @SuppressWarnings("java/ssrf")
     private void uploadLatestReceipt() {
         if (latestPhotoUri == null) {
             Toast.makeText(this, "Take a receipt photo first", Toast.LENGTH_SHORT).show();
@@ -208,45 +194,42 @@ public class MainActivity extends Activity {
         }
         setBusy(true, "Uploading receipt to exp6.py...");
         executor.execute(() -> {
-            HttpURLConnection connection = null;
             try {
                 String boundary = "ReceiptBoundary-" + UUID.randomUUID();
-                URL url = new URL(validatedServerBaseUrl() + "/receipts/upload");
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("POST");
-                connection.setDoOutput(true);
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(60000);
-                connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-
-                try (OutputStream rawOut = new BufferedOutputStream(connection.getOutputStream())) {
-                    writeUtf8(rawOut, "--" + boundary + "\r\n");
-                    writeUtf8(rawOut, "Content-Disposition: form-data; name=\"file\"; filename=\"" + latestPhotoName + "\"\r\n");
-                    writeUtf8(rawOut, "Content-Type: image/jpeg\r\n\r\n");
-                    copyPhotoTo(rawOut);
-                    writeUtf8(rawOut, "\r\n--" + boundary + "--\r\n");
+                byte[] body = buildMultipartBody(boundary);
+                HttpResult response = sendHttpRequest(
+                        validatedServer(),
+                        "POST",
+                        "/receipts/upload",
+                        "multipart/form-data; boundary=" + boundary,
+                        body,
+                        10000,
+                        60000
+                );
+                if (response.statusCode < 200 || response.statusCode >= 300) {
+                    throw new Exception("HTTP " + response.statusCode + ": " + response.body);
                 }
-
-                int code = connection.getResponseCode();
-                String response = readResponse(connection, code);
-                if (code < 200 || code >= 300) {
-                    throw new Exception("HTTP " + code + ": " + response);
-                }
-                JSONObject json = new JSONObject(response);
+                JSONObject json = new JSONObject(response.body);
                 String jobId = json.optString("job_id", "uploaded");
                 runOnUiThread(() -> {
-                    resultTextView.setText(response);
+                    resultTextView.setText(response.body);
                     showStatus("Receipt uploaded to exp6.py. Job: " + jobId);
                     setBusy(false, null);
                 });
             } catch (Exception e) {
                 showError("Upload failed", e);
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
             }
         });
+    }
+
+    private byte[] buildMultipartBody(String boundary) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        writeUtf8(output, "--" + boundary + "\r\n");
+        writeUtf8(output, "Content-Disposition: form-data; name=\"file\"; filename=\"" + latestPhotoName + "\"\r\n");
+        writeUtf8(output, "Content-Type: image/jpeg\r\n\r\n");
+        copyPhotoTo(output);
+        writeUtf8(output, "\r\n--" + boundary + "--\r\n");
+        return output.toByteArray();
     }
 
     private void copyPhotoTo(OutputStream outputStream) throws Exception {
@@ -263,23 +246,70 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String readResponse(HttpURLConnection connection, int code) throws Exception {
-        InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
-        if (stream == null) {
-            return "";
-        }
-        try (InputStream inputStream = stream; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = inputStream.read(buffer)) != -1) {
-                output.write(buffer, 0, read);
+    private HttpResult sendHttpRequest(LocalServer server, String method, String path, String contentType, byte[] body, int connectTimeoutMs, int readTimeoutMs) throws Exception {
+        byte[] requestBody = body == null ? new byte[0] : body;
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(server.host, server.port), connectTimeoutMs);
+            socket.setSoTimeout(readTimeoutMs);
+            OutputStream outputStream = socket.getOutputStream();
+            writeUtf8(outputStream, method + " " + path + " HTTP/1.1\r\n");
+            writeUtf8(outputStream, "Host: " + server.host + ":" + server.port + "\r\n");
+            writeUtf8(outputStream, "Connection: close\r\n");
+            if (contentType != null) {
+                writeUtf8(outputStream, "Content-Type: " + contentType + "\r\n");
             }
-            return output.toString(StandardCharsets.UTF_8.name());
+            writeUtf8(outputStream, "Content-Length: " + requestBody.length + "\r\n\r\n");
+            outputStream.write(requestBody);
+            outputStream.flush();
+            return readHttpResult(socket.getInputStream());
         }
+    }
+
+    private HttpResult readHttpResult(InputStream inputStream) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = inputStream.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        byte[] raw = output.toByteArray();
+        String response = new String(raw, StandardCharsets.ISO_8859_1);
+        int headerEnd = response.indexOf("\r\n\r\n");
+        if (headerEnd < 0) {
+            throw new Exception("Invalid HTTP response from exp6.py");
+        }
+        String[] headerLines = response.substring(0, headerEnd).split("\r\n");
+        String[] statusParts = headerLines[0].split(" ", 3);
+        if (statusParts.length < 2) {
+            throw new Exception("Invalid HTTP status from exp6.py");
+        }
+        int statusCode = Integer.parseInt(statusParts[1]);
+        byte[] bodyBytes = Arrays.copyOfRange(raw, headerEnd + 4, raw.length);
+        return new HttpResult(statusCode, new String(bodyBytes, StandardCharsets.UTF_8));
     }
 
     private void writeUtf8(OutputStream outputStream, String value) throws Exception {
         outputStream.write(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static class LocalServer {
+        final String host;
+        final int port;
+
+        LocalServer(String host, int port) {
+            this.host = host;
+            this.port = port;
+        }
+    }
+
+    private static class HttpResult {
+        final int statusCode;
+        final String body;
+
+        HttpResult(int statusCode, String body) {
+            this.statusCode = statusCode;
+            this.body = body;
+        }
     }
 
     private void setBusy(boolean busy, String message) {
