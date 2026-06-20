@@ -686,13 +686,24 @@ def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Fram
         canvas.itemconfigure(window_id, width=event.width)
 
     def scroll_content(event: tk.Event) -> str:
-        canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        if getattr(event, "num", None) == 4:
+            units = -1
+        elif getattr(event, "num", None) == 5:
+            units = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            units = -1 if delta > 0 else 1
+        canvas.yview_scroll(units, "units")
         return "break"
 
     content.bind("<Configure>", update_scrollregion)
     canvas.bind("<Configure>", resize_content)
     canvas.bind("<MouseWheel>", scroll_content)
     content.bind("<MouseWheel>", scroll_content)
+    canvas.bind("<Button-4>", scroll_content)
+    canvas.bind("<Button-5>", scroll_content)
+    content.bind("<Button-4>", scroll_content)
+    content.bind("<Button-5>", scroll_content)
     return container, content
 
 
