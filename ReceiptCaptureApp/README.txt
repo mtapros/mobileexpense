@@ -8,6 +8,7 @@ How to use:
    - Use a LAN-reachable host such as 0.0.0.0 or your computer's Wi-Fi IP, port 8000.
 2. Unzip this folder, open ReceiptCaptureApp in Android Studio, and run it on a phone.
 3. In the app, set Server URL to http://<desktop LAN IP>:8000.
+   - The app intentionally accepts only plain HTTP URLs on local/private network addresses.
 4. Tap Check exp6.py Server, Take Receipt Photo, then Upload Receipt to exp6.py.
 
 The app only talks to exp6.py:

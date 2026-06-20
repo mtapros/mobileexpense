@@ -24,6 +24,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -132,15 +134,39 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String serverBaseUrl() {
+    private String validatedServerBaseUrl() throws Exception {
         String value = serverUrlEditText.getText().toString().trim();
         if (value.isEmpty()) {
             value = DEFAULT_SERVER_URL;
         }
+        if (!value.toLowerCase(Locale.US).startsWith("http://")) {
+            value = "http://" + value;
+        }
         while (value.endsWith("/")) {
             value = value.substring(0, value.length() - 1);
         }
-        return value;
+        URI uri = new URI(value);
+        if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
+            throw new Exception("Use a plain local HTTP URL like http://192.168.1.50:8000");
+        }
+        if (!isLocalNetworkHost(uri.getHost())) {
+            throw new Exception("Server URL must point to a local/private network address.");
+        }
+        int port = uri.getPort() == -1 ? 8000 : uri.getPort();
+        return new URI("http", null, uri.getHost(), port, "", null, null).toString().replaceAll("/$", "");
+    }
+
+    private boolean isLocalNetworkHost(String host) {
+        try {
+            for (InetAddress address : InetAddress.getAllByName(host)) {
+                if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress() || address.isSiteLocalAddress()) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
     }
 
     private void checkServerHealth() {
@@ -148,7 +174,7 @@ public class MainActivity extends Activity {
         executor.execute(() -> {
             HttpURLConnection connection = null;
             try {
-                URL url = new URL(serverBaseUrl() + "/health");
+                URL url = new URL(validatedServerBaseUrl() + "/health");
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(5000);
@@ -183,7 +209,7 @@ public class MainActivity extends Activity {
             HttpURLConnection connection = null;
             try {
                 String boundary = "ReceiptBoundary-" + UUID.randomUUID();
-                URL url = new URL(serverBaseUrl() + "/receipts/upload");
+                URL url = new URL(validatedServerBaseUrl() + "/receipts/upload");
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
