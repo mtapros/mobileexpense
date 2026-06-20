@@ -668,6 +668,7 @@ class ApiServerController:
 
 
 def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Frame]:
+    """Create a canvas-backed vertical scroller and return its container and content frame."""
     container = tk.Frame(parent, bg=bg)
     container.rowconfigure(0, weight=1)
     container.columnconfigure(0, weight=1)
@@ -686,6 +687,7 @@ def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Fram
         canvas.itemconfigure(window_id, width=event.width)
 
     def scroll_content(event: tk.Event) -> str:
+        # X11/Linux reports wheel scrolling as Button-4 and Button-5 events.
         if getattr(event, "num", None) == 4:
             units = -1
         elif getattr(event, "num", None) == 5:
@@ -898,43 +900,43 @@ class ReceiptApp(tk.Tk):
         left_outer.grid(row=1, column=0, sticky="nsew", padx=(14, 8), pady=(0, 14))
         left_outer.configure(width=360)
         left_outer.grid_propagate(False)
-        scroll_container, left = make_scrollable_frame(left_outer, "#181b20")
+        scroll_container, left_content = make_scrollable_frame(left_outer, "#181b20")
         scroll_container.pack(fill="both", expand=True)
-        left.configure(padx=14, pady=14)
+        left_content.configure(padx=14, pady=14)
         row = 0
-        tk.Label(left, text="Workflow", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 12, "bold")).grid(row=row, column=0, sticky="w")
+        tk.Label(left_content, text="Workflow", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 12, "bold")).grid(row=row, column=0, sticky="w")
         row += 1
         for text, command in [("Open Receipt", self.choose_image), ("Analyze with Qwen", self.analyze_receipt), ("Review Formatted Receipt", self.open_standardized_receipt), ("Approve", self.approve_result), ("Mark Needs Correction", self.mark_needs_correction), ("Export JSON", self.export_json), ("Export CSV", self.export_csv)]:
-            ttk.Button(left, text=text, command=command).grid(row=row, column=0, sticky="ew", pady=4)
+            ttk.Button(left_content, text=text, command=command).grid(row=row, column=0, sticky="ew", pady=4)
             row += 1
-        ttk.Separator(left, orient="horizontal").grid(row=row, column=0, sticky="ew", pady=12)
+        ttk.Separator(left_content, orient="horizontal").grid(row=row, column=0, sticky="ew", pady=12)
         row += 1
-        tk.Label(left, text="Receipt Image", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w")
+        tk.Label(left_content, text="Receipt Image", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w")
         row += 1
-        tk.Entry(left, textvariable=self.image_path_var, bg="#111318", fg="#f5f7fa", insertbackground="#f5f7fa", relief="flat").grid(row=row, column=0, sticky="ew", pady=(4, 8))
+        tk.Entry(left_content, textvariable=self.image_path_var, bg="#111318", fg="#f5f7fa", insertbackground="#f5f7fa", relief="flat").grid(row=row, column=0, sticky="ew", pady=(4, 8))
         row += 1
-        tk.Label(left, text="Server Settings", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
+        tk.Label(left_content, text="Server Settings", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
         row += 1
-        self._labeled_entry(left, row, "Endpoint", self.endpoint_var)
+        self._labeled_entry(left_content, row, "Endpoint", self.endpoint_var)
         row += 1
-        self._labeled_entry(left, row, "Model", self.model_var)
+        self._labeled_entry(left_content, row, "Model", self.model_var)
         row += 1
-        self._labeled_entry(left, row, "API Key", self.api_key_var, show="*")
+        self._labeled_entry(left_content, row, "API Key", self.api_key_var, show="*")
         row += 1
-        self._labeled_entry(left, row, "Timeout", self.timeout_var)
+        self._labeled_entry(left_content, row, "Timeout", self.timeout_var)
         row += 1
-        ttk.Checkbutton(left, text="Structured JSON mode", variable=self.structured_var).grid(row=row, column=0, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(left_content, text="Structured JSON mode", variable=self.structured_var).grid(row=row, column=0, sticky="w", pady=(8, 0))
         row += 1
-        ttk.Button(left, text="Fetch Available Models", command=self.pick_model).grid(row=row, column=0, sticky="ew", pady=6)
+        ttk.Button(left_content, text="Fetch Available Models", command=self.pick_model).grid(row=row, column=0, sticky="ew", pady=6)
         row += 1
-        tk.Label(left, text="Extra Instructions", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
+        tk.Label(left_content, text="Extra Instructions", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
         row += 1
-        extra = tk.Text(left, height=6, bg="#111318", fg="#e8ecf1", insertbackground="#f5f7fa", relief="flat", wrap="word")
+        extra = tk.Text(left_content, height=6, bg="#111318", fg="#e8ecf1", insertbackground="#f5f7fa", relief="flat", wrap="word")
         extra.grid(row=row, column=0, sticky="nsew", pady=(4, 8))
         extra.insert("1.0", self.extra_var.get())
         self.extra_text = extra
         row += 1
-        api_frame = tk.LabelFrame(left, text="Android API Server", bg="#181b20", fg="#f5f7fa")
+        api_frame = tk.LabelFrame(left_content, text="Android API Server", bg="#181b20", fg="#f5f7fa")
         api_frame.grid(row=row, column=0, sticky="ew", pady=(6, 8))
         api_frame.columnconfigure(1, weight=1)
         tk.Label(api_frame, text="Host", bg="#181b20", fg="#98a2b3").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
@@ -945,15 +947,15 @@ class ReceiptApp(tk.Tk):
         ttk.Button(api_frame, text="Stop API Server", command=self.stop_api_server).grid(row=2, column=1, sticky="ew", padx=8, pady=(8, 6))
         tk.Label(api_frame, textvariable=self.api_status_var, bg="#181b20", fg="#d0d5dd", wraplength=300, justify="left").grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 8))
         row += 1
-        ttk.Button(left, text="Save Settings", command=self.save_settings).grid(row=row, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(left_content, text="Save Settings", command=self.save_settings).grid(row=row, column=0, sticky="ew", pady=(0, 4))
         row += 1
-        tk.Label(left, text="API Log", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
+        tk.Label(left_content, text="API Log", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w", pady=(8, 0))
         row += 1
-        server_log = tk.Text(left, height=9, bg="#111318", fg="#d0d5dd", insertbackground="#f5f7fa", relief="flat", wrap="word")
+        server_log = tk.Text(left_content, height=9, bg="#111318", fg="#d0d5dd", insertbackground="#f5f7fa", relief="flat", wrap="word")
         server_log.grid(row=row, column=0, sticky="nsew", pady=(4, 0))
         self.server_log_text = server_log
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(row, weight=1)
+        left_content.columnconfigure(0, weight=1)
+        left_content.rowconfigure(row, weight=1)
 
     def _labeled_entry(self, parent: tk.Widget, row: int, label: str, variable: tk.StringVar, show: str | None = None) -> None:
         tk.Label(parent, text=label, bg="#181b20", fg="#98a2b3", font=("Segoe UI", 9)).grid(row=row, column=0, sticky="w")
@@ -992,13 +994,13 @@ class ReceiptApp(tk.Tk):
         right.columnconfigure(0, weight=1)
         tk.Label(right, text="Review", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
         tk.Label(right, text="Edit fields before opening the standardized receipt window.", bg="#181b20", fg="#98a2b3", font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=(2, 10))
-        scroll_container, review_wrap = make_scrollable_frame(right, "#181b20")
+        scroll_container, review_content = make_scrollable_frame(right, "#181b20")
         scroll_container.grid(row=2, column=0, sticky="nsew")
-        review_wrap.rowconfigure(0, weight=2)
-        review_wrap.rowconfigure(1, weight=2)
-        review_wrap.rowconfigure(2, weight=2)
-        review_wrap.columnconfigure(0, weight=1)
-        key_frame = tk.LabelFrame(review_wrap, text="Key Fields", bg="#181b20", fg="#f5f7fa")
+        review_content.rowconfigure(0, weight=2)
+        review_content.rowconfigure(1, weight=2)
+        review_content.rowconfigure(2, weight=2)
+        review_content.columnconfigure(0, weight=1)
+        key_frame = tk.LabelFrame(review_content, text="Key Fields", bg="#181b20", fg="#f5f7fa")
         key_frame.grid(row=0, column=0, sticky="nsew")
         key_frame.columnconfigure(1, weight=1)
         self.key_vars: dict[str, tk.StringVar] = {}
@@ -1007,7 +1009,7 @@ class ReceiptApp(tk.Tk):
             var = tk.StringVar(value="")
             self.key_vars[field_name] = var
             tk.Entry(key_frame, textvariable=var, bg="#111318", fg="#f5f7fa", insertbackground="#f5f7fa", relief="flat").grid(row=idx, column=1, sticky="ew", padx=8, pady=6)
-        items_frame = tk.LabelFrame(review_wrap, text="Line Items", bg="#181b20", fg="#f5f7fa")
+        items_frame = tk.LabelFrame(review_content, text="Line Items", bg="#181b20", fg="#f5f7fa")
         items_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
         items_frame.rowconfigure(0, weight=1)
         items_frame.columnconfigure(0, weight=1)
@@ -1023,7 +1025,7 @@ class ReceiptApp(tk.Tk):
         self.item_tree.configure(yscrollcommand=item_scroll.set)
         self.item_tree.bind("<Double-1>", self.edit_item_value)
         self.item_row_map: dict[str, int] = {}
-        raw_frame = tk.LabelFrame(review_wrap, text="Raw JSON", bg="#181b20", fg="#f5f7fa")
+        raw_frame = tk.LabelFrame(review_content, text="Raw JSON", bg="#181b20", fg="#f5f7fa")
         raw_frame.grid(row=2, column=0, sticky="nsew")
         raw_frame.rowconfigure(0, weight=1)
         raw_frame.columnconfigure(0, weight=1)
