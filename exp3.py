@@ -667,6 +667,35 @@ class ApiServerController:
             self.log_callback(f"API job {job_id} failed: {error}")
 
 
+def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Frame]:
+    container = tk.Frame(parent, bg=bg)
+    container.rowconfigure(0, weight=1)
+    container.columnconfigure(0, weight=1)
+    canvas = tk.Canvas(container, bg=bg, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    content = tk.Frame(canvas, bg=bg)
+    window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+
+    def update_scrollregion(_event=None) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def resize_content(event) -> None:
+        canvas.itemconfigure(window_id, width=event.width)
+
+    def scroll_content(event) -> str:
+        canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        return "break"
+
+    content.bind("<Configure>", update_scrollregion)
+    canvas.bind("<Configure>", resize_content)
+    canvas.bind("<MouseWheel>", scroll_content)
+    content.bind("<MouseWheel>", scroll_content)
+    return container, content
+
+
 class StandardizedReceiptWindow:
     def __init__(self, parent: tk.Tk, result: ExtractionResult) -> None:
         self.parent = parent
@@ -681,7 +710,9 @@ class StandardizedReceiptWindow:
         fields = self.result.fields
         tax_total = money_to_decimal(fields.get("tax")) or Decimal("0.00")
         items = standardize_items(fields.get("items"), tax_total)
-        card = tk.Frame(self.top, bg="#ffffff", padx=20, pady=20)
+        scroll_container, scroll_body = make_scrollable_frame(self.top, "#f3f4f6")
+        scroll_container.pack(fill="both", expand=True)
+        card = tk.Frame(scroll_body, bg="#ffffff", padx=20, pady=20)
         card.pack(fill="both", expand=True, padx=18, pady=18)
         header = tk.Frame(card, bg="#ffffff")
         header.pack(fill="x")
@@ -852,10 +883,13 @@ class ReceiptApp(tk.Tk):
         self._build_right_inspector()
 
     def _build_left_sidebar(self) -> None:
-        left = tk.Frame(self, bg="#181b20", padx=14, pady=14)
-        left.grid(row=1, column=0, sticky="nsew", padx=(14, 8), pady=(0, 14))
-        left.configure(width=360)
-        left.grid_propagate(False)
+        left_outer = tk.Frame(self, bg="#181b20")
+        left_outer.grid(row=1, column=0, sticky="nsew", padx=(14, 8), pady=(0, 14))
+        left_outer.configure(width=360)
+        left_outer.grid_propagate(False)
+        scroll_container, left = make_scrollable_frame(left_outer, "#181b20")
+        scroll_container.pack(fill="both", expand=True)
+        left.configure(padx=14, pady=14)
         row = 0
         tk.Label(left, text="Workflow", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 12, "bold")).grid(row=row, column=0, sticky="w")
         row += 1
@@ -947,8 +981,8 @@ class ReceiptApp(tk.Tk):
         right.columnconfigure(0, weight=1)
         tk.Label(right, text="Review", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
         tk.Label(right, text="Edit fields before opening the standardized receipt window.", bg="#181b20", fg="#98a2b3", font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=(2, 10))
-        review_wrap = tk.Frame(right, bg="#181b20")
-        review_wrap.grid(row=2, column=0, sticky="nsew")
+        scroll_container, review_wrap = make_scrollable_frame(right, "#181b20")
+        scroll_container.grid(row=2, column=0, sticky="nsew")
         review_wrap.rowconfigure(0, weight=2)
         review_wrap.rowconfigure(1, weight=2)
         review_wrap.rowconfigure(2, weight=2)
