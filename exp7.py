@@ -247,8 +247,21 @@ class ExtractionResult:
     def from_dict(cls, data: dict[str, Any], approval_status: str = "", approved_at: str = "") -> "ExtractionResult":
         """Reconstruct an ExtractionResult from a stored raw_result dict.
 
-        ``approval_status`` and ``approved_at`` override values in *data* when provided,
-        allowing the caller to supply the durable review state stored at the receipt level.
+        Args:
+            data: A dict containing at least ``image_path``, ``model``, ``extracted_at``,
+                  ``fields``, and ``raw_response`` keys.  Missing or None values fall back
+                  to safe defaults.
+            approval_status: When non-empty, overrides the ``approval_status`` value in
+                  *data*.  Pass the durable review state from the enclosing receipt record
+                  (e.g. ``"pending_review"``).  If empty, the value in *data* is used,
+                  defaulting to ``"Pending Review"`` if absent.
+            approved_at: When non-empty, overrides the ``approved_at`` value in *data*.
+
+        Note:
+            ``ExtractionResult`` uses title-case approval labels (``"Pending Review"``,
+            ``"Approved"``, ``"Needs Correction"``) in its in-memory representation.
+            The API-layer store uses snake_case (``"pending_review"``).  Both forms are
+            accepted here and propagated as-is.
         """
         return cls(
             image_path=str(data.get("image_path") or ""),
@@ -497,7 +510,8 @@ class ReceiptStore:
     def get(self, receipt_id: str) -> dict[str, Any] | None:
         with self._lock:
             # Return a deep copy to prevent callers from mutating nested stored data.
-            return copy.deepcopy(self._records[receipt_id]) if receipt_id in self._records else None
+            record = self._records.get(receipt_id)
+            return copy.deepcopy(record) if record is not None else None
 
     def update(self, receipt_id: str, updates: dict[str, Any]) -> bool:
         with self._lock:
@@ -1608,7 +1622,7 @@ class ReceiptApp(tk.Tk):
                 "summary": summarize_fields(self.result.fields),
             })
             if not persisted:
-                messagebox.showwarning("Persistence Warning", "Approval saved in session but could not be synced to the receipt store (record not found).")
+                messagebox.showwarning("Persistence Warning", "Approval saved in session but could not be synced to the receipt store. The stored record may have been removed.")
         messagebox.showinfo("Approved", "Receipt extraction approved.")
 
     def mark_needs_correction(self) -> None:
@@ -1628,7 +1642,7 @@ class ReceiptApp(tk.Tk):
                 "summary": summarize_fields(self.result.fields),
             })
             if not persisted:
-                messagebox.showwarning("Persistence Warning", "Correction flag saved in session but could not be synced to the receipt store (record not found).")
+                messagebox.showwarning("Persistence Warning", "Correction flag saved in session but could not be synced to the receipt store. The stored record may have been removed.")
         messagebox.showinfo("Updated", "Marked as needs correction.")
 
     def export_json(self) -> None:
