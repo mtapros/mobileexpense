@@ -151,7 +151,7 @@
             android:layout_marginTop="6dp"
             android:background="#FFFFFF"
             android:gravity="top|start"
-            android:hint="{&quot;total&quot;:&quot;42.18&quot;}"
+            android:hint='{"total":"42.18"}'
             android:inputType="textMultiLine|textNoSuggestions"
             android:minLines="4"
             android:textColor="#101114"
