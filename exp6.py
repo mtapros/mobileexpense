@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any
+from typing import Any, Annotated
 
 try:
     import tkinter as tk
@@ -505,7 +505,7 @@ class ApiServerController:
             return f"""<!doctype html>
 <html>
 <head>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
   <title>Receipt Capture</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin:0; background:#101114; color:#f5f7fa; }}
@@ -524,16 +524,16 @@ class ApiServerController:
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
+  <div class=\"wrap\">
+    <div class=\"card\">
       <h1>Receipt Capture</h1>
       <p>Take a receipt photo with your phone and send it directly to the extractor server.</p>
-      <input id="file" type="file" accept="image/*" capture="environment">
-      <button id="sendBtn">Take / Choose Photo and Upload</button>
-      <div class="hint">Server: http://{host}:{port}</div>
-      <div class="preview" id="preview">No image selected.</div>
-      <div class="status" id="status">Waiting for receipt photo.</div>
-      <pre id="output"></pre>
+      <input id=\"file\" type=\"file\" accept=\"image/*\" capture=\"environment\">
+      <button id=\"sendBtn\">Take / Choose Photo and Upload</button>
+      <div class=\"hint\">Server: http://{host}:{port}</div>
+      <div class=\"preview\" id=\"preview\">No image selected.</div>
+      <div class=\"status\" id=\"status\">Waiting for receipt photo.</div>
+      <pre id=\"output\"></pre>
     </div>
   </div>
   <script>
@@ -613,7 +613,7 @@ class ApiServerController:
             }
 
         @app.post("/receipts/upload")
-        async def upload_receipt(file: UploadFile = File(...)):
+        async def upload_receipt(file: Annotated[UploadFile, File()]):
             controller.log("/receipts/upload called")
             suffix = Path(file.filename or "receipt.jpg").suffix.lower()
             controller.log(f"Upload filename={file.filename!r} content_type={getattr(file, 'content_type', None)!r} suffix={suffix!r}")
@@ -710,7 +710,6 @@ def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Fram
         canvas.itemconfigure(window_id, width=event.width)
 
     def scroll_content(event: tk.Event) -> str:
-        # X11/Linux reports wheel scrolling as Button-4 and Button-5 events.
         if getattr(event, "num", None) == 4:
             units = -1
         elif getattr(event, "num", None) == 5:
