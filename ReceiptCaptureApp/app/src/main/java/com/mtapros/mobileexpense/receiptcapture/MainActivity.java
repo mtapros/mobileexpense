@@ -26,7 +26,6 @@ public class MainActivity extends Activity {
     public static final String EXTRA_SERVER_URL = "com.mtapros.mobileexpense.receiptcapture.SERVER_URL";
     private static final int CAMERA_PERMISSION_REQUEST = 100;
     private static final int CAPTURE_IMAGE_REQUEST = 101;
-    private static final String DEFAULT_SERVER_URL = "http://192.168.34.44:8000";
 
     private EditText serverUrlEditText;
     private TextView statusTextView;
