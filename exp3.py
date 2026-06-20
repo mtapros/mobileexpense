@@ -668,7 +668,10 @@ class ApiServerController:
 
 
 def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Frame]:
-    """Create a canvas-backed vertical scroller and return its container and content frame."""
+    """Return (container, content) for a canvas-backed vertical scroller.
+
+    Pack or grid the container into parent, then add child widgets to content.
+    """
     container = tk.Frame(parent, bg=bg)
     container.rowconfigure(0, weight=1)
     container.columnconfigure(0, weight=1)
@@ -694,6 +697,8 @@ def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Fram
             units = 1
         else:
             delta = getattr(event, "delta", 0)
+            if delta == 0:
+                return "break"
             units = -1 if delta > 0 else 1
         canvas.yview_scroll(units, "units")
         return "break"
