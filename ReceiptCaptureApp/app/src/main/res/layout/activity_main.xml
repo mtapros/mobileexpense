@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingBottom="6dp"
-        android:text="Receipt Capture"
+        android:text="Receipt Capture &amp; Review"
         android:textColor="#FFFFFF"
         android:textSize="24sp"
         android:textStyle="bold" />
@@ -19,7 +19,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingBottom="10dp"
-        android:text="Take a receipt photo and upload it to exp6.py on your local network."
+        android:text="Upload receipts from the field, then browse processed receipts and review them from the phone."
         android:textColor="#B8C0CC"
         android:textSize="14sp" />
 
@@ -40,7 +40,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:text="Check exp6.py Server" />
+        android:text="Check Receipt Server" />
 
     <Button
         android:id="@+id/captureButton"
@@ -55,14 +55,21 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:enabled="false"
-        android:text="Upload Receipt to exp6.py" />
+        android:text="Upload Receipt" />
+
+    <Button
+        android:id="@+id/browseReceiptsButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Browse Processed Receipts" />
 
     <TextView
         android:id="@+id/statusTextView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
-        android:text="Ready. Start the API server in exp6.py, then take a receipt photo."
+        android:text="Ready. Start the receipt API server in exp7.py, then take a receipt photo."
         android:textColor="#D0D5DD" />
 
     <ImageView
