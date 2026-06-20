@@ -71,6 +71,9 @@ STANDARD_ITEM_COLUMNS = [
     ("line_total", "Line Total"),
 ]
 
+VALID_RECEIPT_STATUSES: frozenset[str] = frozenset({"processing", "complete", "error"})
+VALID_APPROVAL_STATUSES: frozenset[str] = frozenset({"pending_review", "approved", "needs_correction"})
+
 
 def normalize_field_name(name: str) -> str:
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(name or "").strip().lower())
@@ -241,16 +244,20 @@ class ExtractionResult:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False, default=str)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], approval_status_override: str = "", approved_at_override: str = "") -> "ExtractionResult":
-        """Reconstruct an ExtractionResult from a stored raw_result dict."""
+    def from_dict(cls, data: dict[str, Any], approval_status: str = "", approved_at: str = "") -> "ExtractionResult":
+        """Reconstruct an ExtractionResult from a stored raw_result dict.
+
+        ``approval_status`` and ``approved_at`` override values in *data* when provided,
+        allowing the caller to supply the durable review state stored at the receipt level.
+        """
         return cls(
             image_path=str(data.get("image_path") or ""),
             model=str(data.get("model") or "(stored)"),
             extracted_at=str(data.get("extracted_at") or ""),
             fields=dict(data.get("fields") or {}),
             raw_response=dict(data.get("raw_response") or {}),
-            approval_status=approval_status_override or str(data.get("approval_status") or "Pending Review"),
-            approved_at=approved_at_override or str(data.get("approved_at") or ""),
+            approval_status=approval_status or str(data.get("approval_status") or "Pending Review"),
+            approved_at=approved_at or str(data.get("approved_at") or ""),
         )
 
 
@@ -480,7 +487,9 @@ class ReceiptStore:
                 pass
 
     def upsert(self, record: dict[str, Any]) -> None:
-        receipt_id = record["receipt_id"]
+        receipt_id = record.get("receipt_id")
+        if not receipt_id:
+            raise ValueError("record must contain a non-empty 'receipt_id' key")
         with self._lock:
             self._records[receipt_id] = record
             self._save()
@@ -777,15 +786,12 @@ class ApiServerController:
                 "created_at": job.get("created_at"),
             }
 
-        _VALID_STATUS = {"processing", "complete", "error"}
-        _VALID_APPROVAL = {"pending_review", "approved", "needs_correction"}
-
         @app.get("/receipts")
-        async def list_receipts(status: str = None, approval_status: str = None):
-            if status and status not in _VALID_STATUS:
-                raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(sorted(_VALID_STATUS))}")
-            if approval_status and approval_status not in _VALID_APPROVAL:
-                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(_VALID_APPROVAL))}")
+        async def list_receipts(status: str | None = None, approval_status: str | None = None):
+            if status and status not in VALID_RECEIPT_STATUSES:
+                raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(sorted(VALID_RECEIPT_STATUSES))}")
+            if approval_status and approval_status not in VALID_APPROVAL_STATUSES:
+                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(VALID_APPROVAL_STATUSES))}")
             records = controller.store.list_all(status=status, approval_status=approval_status)
             return [
                 {
@@ -833,10 +839,10 @@ class ApiServerController:
                 body = await request.json()
             except Exception:
                 raise HTTPException(status_code=400, detail="Request body must be JSON")
-            allowed_approval = {"approved", "needs_correction", "pending_review"}
+            allowed_approval = VALID_APPROVAL_STATUSES
             new_approval = body.get("approval_status")
             if new_approval and new_approval not in allowed_approval:
-                raise HTTPException(status_code=400, detail="approval_status must be one of: approved, needs_correction, pending_review")
+                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(allowed_approval))}")
             updates = {}
             if new_approval:
                 updates["approval_status"] = new_approval
@@ -847,7 +853,7 @@ class ApiServerController:
             if "review_notes" in body:
                 updates["review_notes"] = body["review_notes"]
             if "corrected_fields" in body and isinstance(body["corrected_fields"], dict):
-                existing = dict(record.get("corrected_fields", {}) or {})
+                existing = dict(record.get("corrected_fields") or {})
                 existing.update(body["corrected_fields"])
                 updates["corrected_fields"] = existing
                 if record.get("summary") and isinstance(record["summary"], dict):
@@ -1667,8 +1673,8 @@ class ReceiptApp(tk.Tk):
             try:
                 result = ExtractionResult.from_dict(
                     raw_result,
-                    approval_status_override=record.get("approval_status", ""),
-                    approved_at_override=record.get("approved_at") or "",
+                    approval_status=record.get("approval_status", ""),
+                    approved_at=record.get("approved_at") or "",
                 )
                 self.result = result
                 self.show_result(result)
@@ -1690,7 +1696,7 @@ class ReceiptApp(tk.Tk):
                 image_path=saved_path,
                 model="(stored)",
                 extracted_at=record.get("processed_at") or record.get("created_at", ""),
-                fields=dict(record["summary"]),
+                fields=dict(record.get("summary") or {}),
                 raw_response={},
                 approval_status=record.get("approval_status", "pending_review"),
                 approved_at=record.get("approved_at") or "",
