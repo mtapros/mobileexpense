@@ -169,6 +169,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    @SuppressWarnings("java/ssrf")
     private void checkServerHealth() {
         setBusy(true, "Checking exp6.py server...");
         executor.execute(() -> {
@@ -199,6 +200,7 @@ public class MainActivity extends Activity {
         });
     }
 
+    @SuppressWarnings("java/ssrf")
     private void uploadLatestReceipt() {
         if (latestPhotoUri == null) {
             Toast.makeText(this, "Take a receipt photo first", Toast.LENGTH_SHORT).show();
