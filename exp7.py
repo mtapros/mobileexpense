@@ -442,8 +442,13 @@ class ReceiptStore:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     self._records = data
-            except Exception:
+            except Exception as exc:
                 self._records = {}
+                try:
+                    with LOG_PATH.open("a", encoding="utf-8") as fh:
+                        fh.write(f"[ReceiptStore] Failed to load {self.path}: {exc}\n")
+                except Exception:
+                    pass
         else:
             self._records = {}
 
@@ -453,8 +458,12 @@ class ReceiptStore:
                 json.dumps(self._records, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                with LOG_PATH.open("a", encoding="utf-8") as fh:
+                    fh.write(f"[ReceiptStore] Failed to save {self.path}: {exc}\n")
+            except Exception:
+                pass
 
     def upsert(self, record: dict[str, Any]) -> None:
         receipt_id = record["receipt_id"]
@@ -476,9 +485,9 @@ class ReceiptStore:
 
     def list_all(
         self,
-        status: "str | None" = None,
-        approval_status: "str | None" = None,
-    ) -> "list[dict[str, Any]]":
+        status: str | None = None,
+        approval_status: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self._lock:
             records = [dict(r) for r in self._records.values()]
         if status:
@@ -803,7 +812,7 @@ class ApiServerController:
             allowed_approval = {"approved", "needs_correction", "pending_review"}
             new_approval = body.get("approval_status")
             if new_approval and new_approval not in allowed_approval:
-                raise HTTPException(status_code=400, detail=f"approval_status must be one of {sorted(allowed_approval)}")
+                raise HTTPException(status_code=400, detail="approval_status must be one of: approved, needs_correction, pending_review")
             updates = {}
             if new_approval:
                 updates["approval_status"] = new_approval
@@ -814,7 +823,7 @@ class ApiServerController:
             if "review_notes" in body:
                 updates["review_notes"] = body["review_notes"]
             if "corrected_fields" in body and isinstance(body["corrected_fields"], dict):
-                existing = record.get("corrected_fields") or {}
+                existing = dict(record.get("corrected_fields") or {})
                 existing.update(body["corrected_fields"])
                 updates["corrected_fields"] = existing
                 if record.get("summary") and isinstance(record["summary"], dict):
@@ -1644,8 +1653,12 @@ class ReceiptApp(tk.Tk):
                     f"(status: {record.get('status', '')}, approval: {record.get('approval_status', '')})"
                 )
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                try:
+                    with LOG_PATH.open("a", encoding="utf-8") as fh:
+                        fh.write(f"[load_stored_receipt] Failed to reconstruct ExtractionResult for {record.get('receipt_id')}: {exc}\n")
+                except Exception:
+                    pass
         if record.get("summary"):
             fields = dict(record["summary"])
             result = ExtractionResult(
