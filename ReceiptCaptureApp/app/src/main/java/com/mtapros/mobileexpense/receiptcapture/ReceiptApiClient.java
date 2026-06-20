@@ -39,6 +39,14 @@ public class ReceiptApiClient {
         return "http://" + server.host + ":" + server.port;
     }
 
+    public static String prettyPrintJson(JSONObject json) {
+        try {
+            return json.toString(2);
+        } catch (Exception ignored) {
+            return json.toString();
+        }
+    }
+
     public JSONObject checkHealth() throws Exception {
         HttpResult response = sendHttpRequest("GET", "/health", null, null, 5000, 10000);
         return requireJsonObject(response, "Server check failed");

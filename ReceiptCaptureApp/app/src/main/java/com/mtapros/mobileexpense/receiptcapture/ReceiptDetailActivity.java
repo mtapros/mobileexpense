@@ -126,7 +126,7 @@ public class ReceiptDetailActivity extends Activity {
         summaryJsonTextView.setText(formatJson(detail.summary, "No extracted summary yet."));
         rawJsonTextView.setText(formatJson(detail.rawResult, "No raw extraction JSON is available yet."));
         notesEditText.setText(detail.reviewNotes == null ? "" : detail.reviewNotes);
-        correctedFieldsEditText.setText(detail.correctedFields.length() == 0 ? "" : prettyPrintJson(detail.correctedFields));
+        correctedFieldsEditText.setText(detail.correctedFields.length() == 0 ? "" : ReceiptApiClient.prettyPrintJson(detail.correctedFields));
 
         boolean reviewable = "complete".equalsIgnoreCase(detail.status);
         approveButton.setEnabled(reviewable);
@@ -223,15 +223,7 @@ public class ReceiptDetailActivity extends Activity {
         if (json == null || json.length() == 0) {
             return fallback;
         }
-        return prettyPrintJson(json);
-    }
-
-    private String prettyPrintJson(JSONObject json) {
-        try {
-            return json.toString(2);
-        } catch (Exception ignored) {
-            return json.toString();
-        }
+        return ReceiptApiClient.prettyPrintJson(json);
     }
 
     private String emptyOrFallback(String value, String fallback) {

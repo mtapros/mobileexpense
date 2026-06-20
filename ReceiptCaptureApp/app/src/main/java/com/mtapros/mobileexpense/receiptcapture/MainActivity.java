@@ -196,11 +196,7 @@ public class MainActivity extends Activity {
     }
 
     private String formatJson(JSONObject json) {
-        try {
-            return json.toString(2);
-        } catch (Exception ignored) {
-            return json.toString();
-        }
+        return ReceiptApiClient.prettyPrintJson(json);
     }
 
     private void showError(String prefix, Exception e) {
