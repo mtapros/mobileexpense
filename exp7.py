@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import csv
 import json
 import os
@@ -239,6 +240,19 @@ class ExtractionResult:
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False, default=str)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], approval_status_override: str = "", approved_at_override: str = "") -> "ExtractionResult":
+        """Reconstruct an ExtractionResult from a stored raw_result dict."""
+        return cls(
+            image_path=str(data.get("image_path") or ""),
+            model=str(data.get("model") or "(stored)"),
+            extracted_at=str(data.get("extracted_at") or ""),
+            fields=dict(data.get("fields") or {}),
+            raw_response=dict(data.get("raw_response") or {}),
+            approval_status=approval_status_override or str(data.get("approval_status") or "Pending Review"),
+            approved_at=approved_at_override or str(data.get("approved_at") or ""),
+        )
+
 
 class ReceiptClientError(Exception):
     pass
@@ -473,8 +487,8 @@ class ReceiptStore:
 
     def get(self, receipt_id: str) -> dict[str, Any] | None:
         with self._lock:
-            # Return a shallow copy to prevent callers from mutating the stored record.
-            return dict(self._records[receipt_id]) if receipt_id in self._records else None
+            # Return a deep copy to prevent callers from mutating nested stored data.
+            return copy.deepcopy(self._records[receipt_id]) if receipt_id in self._records else None
 
     def update(self, receipt_id: str, updates: dict[str, Any]) -> bool:
         with self._lock:
@@ -491,7 +505,7 @@ class ReceiptStore:
     ) -> list[dict[str, Any]]:
         with self._lock:
             records = [
-                dict(r) for r in self._records.values()
+                copy.deepcopy(r) for r in self._records.values()
                 if (not status or r.get("status") == status)
                 and (not approval_status or r.get("approval_status") == approval_status)
             ]
@@ -763,8 +777,15 @@ class ApiServerController:
                 "created_at": job.get("created_at"),
             }
 
+        _VALID_STATUS = {"processing", "complete", "error"}
+        _VALID_APPROVAL = {"pending_review", "approved", "needs_correction"}
+
         @app.get("/receipts")
         async def list_receipts(status: str = None, approval_status: str = None):
+            if status and status not in _VALID_STATUS:
+                raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(sorted(_VALID_STATUS))}")
+            if approval_status and approval_status not in _VALID_APPROVAL:
+                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(_VALID_APPROVAL))}")
             records = controller.store.list_all(status=status, approval_status=approval_status)
             return [
                 {
@@ -1575,11 +1596,13 @@ class ReceiptApp(tk.Tk):
         self.raw_text.delete("1.0", "end")
         self.raw_text.insert("1.0", self.result.to_json())
         if self.current_receipt_id:
-            self.api_server.store.update(self.current_receipt_id, {
+            persisted = self.api_server.store.update(self.current_receipt_id, {
                 "approval_status": "approved",
                 "approved_at": approved_at,
                 "summary": summarize_fields(self.result.fields),
             })
+            if not persisted:
+                messagebox.showwarning("Persistence Warning", "Approval saved in session but could not be synced to the receipt store (record not found).")
         messagebox.showinfo("Approved", "Receipt extraction approved.")
 
     def mark_needs_correction(self) -> None:
@@ -1593,11 +1616,13 @@ class ReceiptApp(tk.Tk):
         self.raw_text.delete("1.0", "end")
         self.raw_text.insert("1.0", self.result.to_json())
         if self.current_receipt_id:
-            self.api_server.store.update(self.current_receipt_id, {
+            persisted = self.api_server.store.update(self.current_receipt_id, {
                 "approval_status": "needs_correction",
                 "approved_at": None,
                 "summary": summarize_fields(self.result.fields),
             })
+            if not persisted:
+                messagebox.showwarning("Persistence Warning", "Correction flag saved in session but could not be synced to the receipt store (record not found).")
         messagebox.showinfo("Updated", "Marked as needs correction.")
 
     def export_json(self) -> None:
@@ -1640,14 +1665,10 @@ class ReceiptApp(tk.Tk):
         raw_result = record.get("raw_result")
         if raw_result:
             try:
-                result = ExtractionResult(
-                    image_path=raw_result.get("image_path", saved_path),
-                    model=raw_result.get("model", ""),
-                    extracted_at=raw_result.get("extracted_at", ""),
-                    fields=raw_result.get("fields", {}),
-                    raw_response=raw_result.get("raw_response", {}),
-                    approval_status=record.get("approval_status", "pending_review"),
-                    approved_at=record.get("approved_at") or "",
+                result = ExtractionResult.from_dict(
+                    raw_result,
+                    approval_status_override=record.get("approval_status", ""),
+                    approved_at_override=record.get("approved_at") or "",
                 )
                 self.result = result
                 self.show_result(result)
@@ -1665,12 +1686,11 @@ class ReceiptApp(tk.Tk):
                 except Exception:
                     pass
         if record.get("summary"):
-            fields = dict(record["summary"])
             result = ExtractionResult(
                 image_path=saved_path,
-                model=record.get("raw_result", {}).get("model", "(stored)") if record.get("raw_result") else "(stored)",
+                model="(stored)",
                 extracted_at=record.get("processed_at") or record.get("created_at", ""),
-                fields=fields,
+                fields=dict(record["summary"]),
                 raw_response={},
                 approval_status=record.get("approval_status", "pending_review"),
                 approved_at=record.get("approved_at") or "",
