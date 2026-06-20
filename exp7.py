@@ -471,8 +471,9 @@ class ReceiptStore:
             self._records[receipt_id] = record
             self._save()
 
-    def get(self, receipt_id: str) -> "dict[str, Any] | None":
+    def get(self, receipt_id: str) -> dict[str, Any] | None:
         with self._lock:
+            # Return a shallow copy to prevent callers from mutating the stored record.
             return dict(self._records[receipt_id]) if receipt_id in self._records else None
 
     def update(self, receipt_id: str, updates: dict[str, Any]) -> bool:
@@ -489,11 +490,11 @@ class ReceiptStore:
         approval_status: str | None = None,
     ) -> list[dict[str, Any]]:
         with self._lock:
-            records = [dict(r) for r in self._records.values()]
-        if status:
-            records = [r for r in records if r.get("status") == status]
-        if approval_status:
-            records = [r for r in records if r.get("approval_status") == approval_status]
+            records = [
+                dict(r) for r in self._records.values()
+                if (not status or r.get("status") == status)
+                and (not approval_status or r.get("approval_status") == approval_status)
+            ]
         records.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return records
 
@@ -793,8 +794,10 @@ class ApiServerController:
             if not record:
                 raise HTTPException(status_code=404, detail="Receipt not found")
             saved_path = record.get("saved_path", "")
-            if not saved_path or not Path(saved_path).exists():
-                raise HTTPException(status_code=404, detail="Receipt image not found on disk")
+            if not saved_path:
+                raise HTTPException(status_code=404, detail="Receipt has no saved image path")
+            if not Path(saved_path).exists():
+                raise HTTPException(status_code=404, detail="Receipt image file not found on disk")
             suffix = Path(saved_path).suffix.lower()
             media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
             media_type = media_types.get(suffix, "application/octet-stream")
@@ -823,7 +826,7 @@ class ApiServerController:
             if "review_notes" in body:
                 updates["review_notes"] = body["review_notes"]
             if "corrected_fields" in body and isinstance(body["corrected_fields"], dict):
-                existing = dict(record.get("corrected_fields") or {})
+                existing = dict(record.get("corrected_fields", {}) or {})
                 existing.update(body["corrected_fields"])
                 updates["corrected_fields"] = existing
                 if record.get("summary") and isinstance(record["summary"], dict):
@@ -1071,7 +1074,7 @@ class StoredReceiptsWindow:
     def _load_selected(self) -> None:
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("No Selection", "Select a receipt to load.", parent=self.top)
+            messagebox.showwarning("No Selection", "Please select a receipt from the list to load.", parent=self.top)
             return
         receipt_id = selected[0]
         record = self.parent.api_server.store.get(receipt_id)
@@ -1654,6 +1657,8 @@ class ReceiptApp(tk.Tk):
                 )
                 return
             except Exception as exc:
+                # Log reconstruction failure and fall through to summary-based loading.
+                # The nested exception suppressor guards against LOG_PATH being unwritable.
                 try:
                     with LOG_PATH.open("a", encoding="utf-8") as fh:
                         fh.write(f"[load_stored_receipt] Failed to reconstruct ExtractionResult for {record.get('receipt_id')}: {exc}\n")
@@ -1663,7 +1668,7 @@ class ReceiptApp(tk.Tk):
             fields = dict(record["summary"])
             result = ExtractionResult(
                 image_path=saved_path,
-                model="(stored)",
+                model=record.get("raw_result", {}).get("model", "(stored)") if record.get("raw_result") else "(stored)",
                 extracted_at=record.get("processed_at") or record.get("created_at", ""),
                 fields=fields,
                 raw_response={},
@@ -1677,14 +1682,16 @@ class ReceiptApp(tk.Tk):
                 f"(status: {record.get('status', '')}, approval: {record.get('approval_status', '')})"
             )
         else:
+            status = record.get("status", "unknown")
             self.status_var.set(
-                f"Receipt {record.get('filename', '')} — status: {record.get('status', '')}. "
+                f"Receipt {record.get('filename', '')} — status: {status}. "
                 "No extracted data available yet."
             )
+            hint = " Try refreshing the list or wait for processing to complete." if status == "processing" else ""
             messagebox.showinfo(
                 "No Extracted Data",
                 f"Receipt '{record.get('filename', '')}' has no extracted data yet.\n"
-                f"Status: {record.get('status', 'unknown')}",
+                f"Status: {status}.{hint}",
             )
 
     def on_close(self) -> None:
