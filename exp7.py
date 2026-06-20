@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import csv
 import json
 import os
@@ -42,6 +43,7 @@ MONEY_QUANT = Decimal("0.01")
 UPLOAD_DIR = Path.home() / "receipt_api_uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 LOG_PATH = Path.home() / "receipt_server.log"
+RECEIPT_STORE_PATH = Path.home() / "receipt_store.json"
 
 DEFAULT_FIELDS: list[dict[str, str]] = [
     {"name": "merchant_name", "description": "Store, restaurant, vendor, or merchant name."},
@@ -68,6 +70,9 @@ STANDARD_ITEM_COLUMNS = [
     ("allocated_tax", "Allocated Tax"),
     ("line_total", "Line Total"),
 ]
+
+VALID_RECEIPT_STATUSES: frozenset[str] = frozenset({"processing", "complete", "error"})
+VALID_APPROVAL_STATUSES: frozenset[str] = frozenset({"pending_review", "approved", "needs_correction"})
 
 
 def normalize_field_name(name: str) -> str:
@@ -237,6 +242,36 @@ class ExtractionResult:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False, default=str)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], approval_status: str = "", approved_at: str = "") -> "ExtractionResult":
+        """Reconstruct an ExtractionResult from a stored raw_result dict.
+
+        Args:
+            data: A dict containing at least ``image_path``, ``model``, ``extracted_at``,
+                  ``fields``, and ``raw_response`` keys.  Missing or None values fall back
+                  to safe defaults.
+            approval_status: When non-empty, overrides the ``approval_status`` value in
+                  *data*.  Pass the durable review state from the enclosing receipt record
+                  (e.g. ``"pending_review"``).  If empty, the value in *data* is used,
+                  defaulting to ``"Pending Review"`` if absent.
+            approved_at: When non-empty, overrides the ``approved_at`` value in *data*.
+
+        Note:
+            ``ExtractionResult`` uses title-case approval labels (``"Pending Review"``,
+            ``"Approved"``, ``"Needs Correction"``) in its in-memory representation.
+            The API-layer store uses snake_case (``"pending_review"``).  Both forms are
+            accepted here and propagated as-is.
+        """
+        return cls(
+            image_path=str(data.get("image_path") or ""),
+            model=str(data.get("model") or "(stored)"),
+            extracted_at=str(data.get("extracted_at") or ""),
+            fields=dict(data.get("fields") or {}),
+            raw_response=dict(data.get("raw_response") or {}),
+            approval_status=approval_status or str(data.get("approval_status") or "Pending Review"),
+            approved_at=approved_at or str(data.get("approved_at") or ""),
+        )
 
 
 class ReceiptClientError(Exception):
@@ -426,6 +461,81 @@ def summarize_fields(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class ReceiptStore:
+    """Lightweight JSON-backed persistent store for receipt records."""
+
+    def __init__(self, path: Path = RECEIPT_STORE_PATH) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._records: dict[str, dict[str, Any]] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self.path.exists():
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._records = data
+            except Exception as exc:
+                self._records = {}
+                try:
+                    with LOG_PATH.open("a", encoding="utf-8") as fh:
+                        fh.write(f"[ReceiptStore] Failed to load {self.path}: {exc}\n")
+                except Exception:
+                    pass
+        else:
+            self._records = {}
+
+    def _save(self) -> None:
+        try:
+            self.path.write_text(
+                json.dumps(self._records, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            try:
+                with LOG_PATH.open("a", encoding="utf-8") as fh:
+                    fh.write(f"[ReceiptStore] Failed to save {self.path}: {exc}\n")
+            except Exception:
+                pass
+
+    def upsert(self, record: dict[str, Any]) -> None:
+        receipt_id = record.get("receipt_id")
+        if not receipt_id:
+            raise ValueError("record must contain a non-empty 'receipt_id' key")
+        with self._lock:
+            self._records[receipt_id] = record
+            self._save()
+
+    def get(self, receipt_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            # Return a deep copy to prevent callers from mutating nested stored data.
+            record = self._records.get(receipt_id)
+            return copy.deepcopy(record) if record is not None else None
+
+    def update(self, receipt_id: str, updates: dict[str, Any]) -> bool:
+        with self._lock:
+            if receipt_id not in self._records:
+                return False
+            self._records[receipt_id].update(updates)
+            self._save()
+            return True
+
+    def list_all(
+        self,
+        status: str | None = None,
+        approval_status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            records = [
+                copy.deepcopy(r) for r in self._records.values()
+                if (not status or r.get("status") == status)
+                and (not approval_status or r.get("approval_status") == approval_status)
+            ]
+        records.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return records
+
+
 class ApiServerController:
     def __init__(self, config_getter, log_callback=None):
         self.config_getter = config_getter
@@ -437,6 +547,7 @@ class ApiServerController:
         self.lock = threading.Lock()
         self.running_host = None
         self.running_port = None
+        self.store = ReceiptStore()
 
     def log(self, message: str) -> None:
         stamped = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
@@ -492,7 +603,7 @@ class ApiServerController:
 
     def _create_app(self):
         from fastapi import FastAPI, HTTPException, Request
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import FileResponse, HTMLResponse
         app = FastAPI(title="Receipt API", version="1.0")
         controller = self
 
@@ -642,27 +753,45 @@ class ApiServerController:
 
             controller.log(f"Saved upload to {save_path} ({size_bytes} bytes)")
 
+            record = {
+                "receipt_id": job_id,
+                "job_id": job_id,
+                "status": "processing",
+                "approval_status": "pending_review",
+                "filename": filename,
+                "saved_path": str(save_path),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "processed_at": None,
+                "approved_at": None,
+                "summary": None,
+                "raw_result": None,
+                "review_notes": None,
+                "corrected_fields": {},
+                "error": None,
+            }
             with controller.lock:
-                controller.jobs[job_id] = {
-                    "job_id": job_id,
-                    "status": "processing",
-                    "filename": filename,
-                    "saved_path": str(save_path),
-                    "created_at": datetime.now().isoformat(timespec="seconds"),
-                    "summary": None,
-                    "error": None,
-                }
+                controller.jobs[job_id] = dict(record)
+            controller.store.upsert(record)
 
             threading.Thread(target=controller._process_job, args=(job_id, str(save_path)), daemon=True).start()
             controller.log(f"Accepted API upload: {filename} -> job {job_id}")
-            return {"job_id": job_id, "status": "processing"}
+            return {"job_id": job_id, "receipt_id": job_id, "status": "processing"}
 
         @app.get("/jobs/{job_id}")
         async def get_job(job_id: str):
             with controller.lock:
                 job = controller.jobs.get(job_id)
             if not job:
-                raise HTTPException(status_code=404, detail="Job not found")
+                record = controller.store.get(job_id)
+                if not record:
+                    raise HTTPException(status_code=404, detail="Job not found")
+                return {
+                    "job_id": record["job_id"],
+                    "status": record["status"],
+                    "summary": record.get("summary"),
+                    "error": record.get("error"),
+                    "created_at": record.get("created_at"),
+                }
             return {
                 "job_id": job["job_id"],
                 "status": job["status"],
@@ -670,6 +799,88 @@ class ApiServerController:
                 "error": job.get("error"),
                 "created_at": job.get("created_at"),
             }
+
+        @app.get("/receipts")
+        async def list_receipts(status: str | None = None, approval_status: str | None = None):
+            if status and status not in VALID_RECEIPT_STATUSES:
+                raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(sorted(VALID_RECEIPT_STATUSES))}")
+            if approval_status and approval_status not in VALID_APPROVAL_STATUSES:
+                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(VALID_APPROVAL_STATUSES))}")
+            records = controller.store.list_all(status=status, approval_status=approval_status)
+            return [
+                {
+                    "receipt_id": r["receipt_id"],
+                    "filename": r.get("filename"),
+                    "created_at": r.get("created_at"),
+                    "processed_at": r.get("processed_at"),
+                    "status": r.get("status"),
+                    "approval_status": r.get("approval_status"),
+                    "merchant_name": (r.get("summary") or {}).get("merchant_name"),
+                    "total": (r.get("summary") or {}).get("total"),
+                    "image_url": f"/receipts/{r['receipt_id']}/image",
+                }
+                for r in records
+            ]
+
+        @app.get("/receipts/{receipt_id}")
+        async def get_receipt(receipt_id: str):
+            record = controller.store.get(receipt_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="Receipt not found")
+            return record
+
+        @app.get("/receipts/{receipt_id}/image")
+        async def get_receipt_image(receipt_id: str):
+            record = controller.store.get(receipt_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="Receipt not found")
+            saved_path = record.get("saved_path", "")
+            if not saved_path:
+                raise HTTPException(status_code=404, detail="Receipt has no saved image path")
+            if not Path(saved_path).exists():
+                raise HTTPException(status_code=404, detail="Receipt image file not found on disk")
+            suffix = Path(saved_path).suffix.lower()
+            media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+            media_type = media_types.get(suffix, "application/octet-stream")
+            return FileResponse(path=saved_path, media_type=media_type, filename=record.get("filename", Path(saved_path).name))
+
+        @app.post("/receipts/{receipt_id}/review")
+        async def review_receipt(receipt_id: str, request: Request):
+            record = controller.store.get(receipt_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="Receipt not found")
+            try:
+                body = await request.json()
+            except Exception:
+                raise HTTPException(status_code=400, detail="Request body must be JSON")
+            allowed_approval = VALID_APPROVAL_STATUSES
+            new_approval = body.get("approval_status")
+            if new_approval and new_approval not in allowed_approval:
+                raise HTTPException(status_code=400, detail=f"approval_status must be one of: {', '.join(sorted(allowed_approval))}")
+            updates = {}
+            if new_approval:
+                updates["approval_status"] = new_approval
+                if new_approval == "approved":
+                    updates["approved_at"] = datetime.now().isoformat(timespec="seconds")
+                else:
+                    updates["approved_at"] = None
+            if "review_notes" in body:
+                updates["review_notes"] = body["review_notes"]
+            if "corrected_fields" in body and isinstance(body["corrected_fields"], dict):
+                existing = dict(record.get("corrected_fields") or {})
+                existing.update(body["corrected_fields"])
+                updates["corrected_fields"] = existing
+                if record.get("summary") and isinstance(record["summary"], dict):
+                    merged_summary = dict(record["summary"])
+                    merged_summary.update(body["corrected_fields"])
+                    updates["summary"] = merged_summary
+            controller.store.update(receipt_id, updates)
+            with controller.lock:
+                if receipt_id in controller.jobs:
+                    controller.jobs[receipt_id].update(updates)
+            updated = controller.store.get(receipt_id)
+            controller.log(f"Receipt {receipt_id} reviewed: {updates}")
+            return {"receipt_id": receipt_id, "approval_status": updated.get("approval_status"), "review_notes": updated.get("review_notes")}
 
         return app
 
@@ -688,17 +899,26 @@ class ApiServerController:
             )
             result = client.extract_receipt(image_path, field_specs, config.get("extra_instructions", ""))
             summary = summarize_fields(result.fields)
+            processed_at = datetime.now().isoformat(timespec="seconds")
             with self.lock:
                 if job_id in self.jobs:
                     self.jobs[job_id]["status"] = "complete"
+                    self.jobs[job_id]["processed_at"] = processed_at
                     self.jobs[job_id]["summary"] = summary
                     self.jobs[job_id]["raw_result"] = asdict(result)
+            self.store.update(job_id, {
+                "status": "complete",
+                "processed_at": processed_at,
+                "summary": summary,
+                "raw_result": asdict(result),
+            })
             self.log(f"Completed API job {job_id}")
         except Exception as error:
             with self.lock:
                 if job_id in self.jobs:
                     self.jobs[job_id]["status"] = "error"
                     self.jobs[job_id]["error"] = str(error)
+            self.store.update(job_id, {"status": "error", "error": str(error)})
             self.log(f"API job {job_id} failed: {error}\n{traceback.format_exc()}")
 
 
@@ -822,6 +1042,90 @@ class StandardizedReceiptWindow:
             tk.Label(footer, text=f"Confidence: {confidence}", bg="#ffffff", fg="#6b7280", font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
 
 
+class StoredReceiptsWindow:
+    """Desktop UI window for browsing and loading persisted receipts."""
+
+    def __init__(self, parent: "ReceiptApp") -> None:
+        self.parent = parent
+        self.top = tk.Toplevel(parent)
+        self.top.title("Stored Receipts")
+        self.top.geometry("1020x560")
+        self.top.configure(bg="#101114")
+        self._build()
+        self._refresh()
+
+    def _build(self) -> None:
+        top_bar = tk.Frame(self.top, bg="#101114", padx=12, pady=10)
+        top_bar.pack(fill="x")
+        tk.Label(
+            top_bar, text="Stored Receipts", bg="#101114", fg="#f5f7fa",
+            font=("Segoe UI", 14, "bold"),
+        ).pack(side="left")
+        ttk.Button(top_bar, text="Refresh", command=self._refresh).pack(side="right", padx=4)
+        ttk.Button(top_bar, text="Load Selected", command=self._load_selected).pack(side="right", padx=4)
+
+        tree_frame = tk.Frame(self.top, bg="#101114")
+        tree_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+
+        columns = ("short_id", "filename", "created_at", "status", "approval_status", "merchant", "total")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=18)
+        col_defs = [
+            ("short_id", "ID", 90),
+            ("filename", "Filename", 190),
+            ("created_at", "Uploaded At", 155),
+            ("status", "Status", 105),
+            ("approval_status", "Approval", 130),
+            ("merchant", "Merchant", 190),
+            ("total", "Total", 80),
+        ]
+        for key, label, width in col_defs:
+            self.tree.heading(key, text=label)
+            self.tree.column(key, width=width, anchor="w")
+
+        vscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hscroll = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vscroll.set, xscrollcommand=hscroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+
+        self.tree.bind("<Double-1>", lambda _e: self._load_selected())
+
+    def _refresh(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        records = self.parent.api_server.store.list_all()
+        for r in records:
+            summary = r.get("summary") or {}
+            self.tree.insert(
+                "", "end",
+                iid=r.get("receipt_id", ""),
+                values=(
+                    r.get("receipt_id", "")[:8],
+                    r.get("filename", ""),
+                    r.get("created_at", ""),
+                    r.get("status", ""),
+                    r.get("approval_status", "pending_review"),
+                    summary.get("merchant_name") or "",
+                    summary.get("total") or "",
+                ),
+            )
+
+    def _load_selected(self) -> None:
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a receipt from the list to load.", parent=self.top)
+            return
+        receipt_id = selected[0]
+        record = self.parent.api_server.store.get(receipt_id)
+        if not record:
+            messagebox.showerror("Not Found", "Receipt record not found.", parent=self.top)
+            return
+        self.parent.load_stored_receipt(record)
+        self.top.lift()
+
+
 class ReceiptApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -838,6 +1142,7 @@ class ReceiptApp(tk.Tk):
         self.config_data = self._load_config()
         self.field_specs = [FieldSpec(item["name"], item.get("description", "")) for item in self.config_data.get("fields", DEFAULT_FIELDS)]
         self.result: ExtractionResult | None = None
+        self.current_receipt_id: str | None = None
         self.preview_original = None
         self.preview_display = None
         self.api_server = ApiServerController(self._runtime_config, self._append_server_log)
@@ -944,6 +1249,8 @@ class ReceiptApp(tk.Tk):
         for text, command in [("Open Receipt", self.choose_image), ("Analyze with Qwen", self.analyze_receipt), ("Review Formatted Receipt", self.open_standardized_receipt), ("Approve", self.approve_result), ("Mark Needs Correction", self.mark_needs_correction), ("Export JSON", self.export_json), ("Export CSV", self.export_csv)]:
             ttk.Button(left_content, text=text, command=command).grid(row=row, column=0, sticky="ew", pady=4)
             row += 1
+        ttk.Button(left_content, text="Browse Stored Receipts", command=self.browse_stored_receipts).grid(row=row, column=0, sticky="ew", pady=4)
+        row += 1
         ttk.Separator(left_content, orient="horizontal").grid(row=row, column=0, sticky="ew", pady=12)
         row += 1
         tk.Label(left_content, text="Receipt Image", bg="#181b20", fg="#f5f7fa", font=("Segoe UI", 11, "bold")).grid(row=row, column=0, sticky="w")
@@ -1308,6 +1615,14 @@ class ReceiptApp(tk.Tk):
         self.status_var.set(f"Approved at {approved_at}.")
         self.raw_text.delete("1.0", "end")
         self.raw_text.insert("1.0", self.result.to_json())
+        if self.current_receipt_id:
+            persisted = self.api_server.store.update(self.current_receipt_id, {
+                "approval_status": "approved",
+                "approved_at": approved_at,
+                "summary": summarize_fields(self.result.fields),
+            })
+            if not persisted:
+                messagebox.showwarning("Persistence Warning", "Approval saved in session but could not be synced to the receipt store. The stored record may have been removed.")
         messagebox.showinfo("Approved", "Receipt extraction approved.")
 
     def mark_needs_correction(self) -> None:
@@ -1320,6 +1635,14 @@ class ReceiptApp(tk.Tk):
         self.status_var.set("Marked as needs correction.")
         self.raw_text.delete("1.0", "end")
         self.raw_text.insert("1.0", self.result.to_json())
+        if self.current_receipt_id:
+            persisted = self.api_server.store.update(self.current_receipt_id, {
+                "approval_status": "needs_correction",
+                "approved_at": None,
+                "summary": summarize_fields(self.result.fields),
+            })
+            if not persisted:
+                messagebox.showwarning("Persistence Warning", "Correction flag saved in session but could not be synced to the receipt store. The stored record may have been removed.")
         messagebox.showinfo("Updated", "Marked as needs correction.")
 
     def export_json(self) -> None:
@@ -1348,6 +1671,68 @@ class ReceiptApp(tk.Tk):
                 value = self.result.fields.get(key)
                 writer.writerow([key, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value])
         self.status_var.set(f"Exported CSV to {path}")
+
+    def browse_stored_receipts(self) -> None:
+        StoredReceiptsWindow(self)
+
+    def load_stored_receipt(self, record: dict[str, Any]) -> None:
+        """Load a persisted receipt record into the desktop review UI."""
+        saved_path = record.get("saved_path", "")
+        if saved_path and Path(saved_path).exists():
+            self.image_path_var.set(saved_path)
+            self.display_preview(saved_path)
+        self.current_receipt_id = record.get("receipt_id")
+        raw_result = record.get("raw_result")
+        if raw_result:
+            try:
+                result = ExtractionResult.from_dict(
+                    raw_result,
+                    approval_status=record.get("approval_status", ""),
+                    approved_at=record.get("approved_at") or "",
+                )
+                self.result = result
+                self.show_result(result)
+                self.status_var.set(
+                    f"Loaded stored receipt: {record.get('filename', '')} "
+                    f"(status: {record.get('status', '')}, approval: {record.get('approval_status', '')})"
+                )
+                return
+            except Exception as exc:
+                # Log reconstruction failure and fall through to summary-based loading.
+                # The nested exception suppressor guards against LOG_PATH being unwritable.
+                try:
+                    with LOG_PATH.open("a", encoding="utf-8") as fh:
+                        fh.write(f"[load_stored_receipt] Failed to reconstruct ExtractionResult for {record.get('receipt_id')}: {exc}\n")
+                except Exception:
+                    pass
+        if record.get("summary"):
+            result = ExtractionResult(
+                image_path=saved_path,
+                model="(stored)",
+                extracted_at=record.get("processed_at") or record.get("created_at", ""),
+                fields=dict(record.get("summary") or {}),
+                raw_response={},
+                approval_status=record.get("approval_status", "pending_review"),
+                approved_at=record.get("approved_at") or "",
+            )
+            self.result = result
+            self.show_result(result)
+            self.status_var.set(
+                f"Loaded stored receipt: {record.get('filename', '')} "
+                f"(status: {record.get('status', '')}, approval: {record.get('approval_status', '')})"
+            )
+        else:
+            status = record.get("status", "unknown")
+            self.status_var.set(
+                f"Receipt {record.get('filename', '')} — status: {status}. "
+                "No extracted data available yet."
+            )
+            hint = " Try refreshing the list or wait for processing to complete." if status == "processing" else ""
+            messagebox.showinfo(
+                "No Extracted Data",
+                f"Receipt '{record.get('filename', '')}' has no extracted data yet.\n"
+                f"Status: {status}.{hint}",
+            )
 
     def on_close(self) -> None:
         try:
