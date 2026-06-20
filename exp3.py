@@ -682,10 +682,10 @@ def make_scrollable_frame(parent: tk.Widget, bg: str) -> tuple[tk.Frame, tk.Fram
     def update_scrollregion(_event=None) -> None:
         canvas.configure(scrollregion=canvas.bbox("all"))
 
-    def resize_content(event) -> None:
+    def resize_content(event: tk.Event) -> None:
         canvas.itemconfigure(window_id, width=event.width)
 
-    def scroll_content(event) -> str:
+    def scroll_content(event: tk.Event) -> str:
         canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
         return "break"
 
