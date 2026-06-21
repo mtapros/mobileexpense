@@ -1,6 +1,8 @@
 package com.mtapros.mobileexpense.lmstudiochat;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -10,8 +12,12 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public class LmStudioApiClient {
     private final LocalServer server;
@@ -37,9 +43,34 @@ public class LmStudioApiClient {
         return requireJsonObject(response, "Server check failed");
     }
 
-    public JSONObject sendChat(String query) throws Exception {
+    public List<String> listModels() throws Exception {
+        HttpResult response = sendHttpRequest("GET", "/models", null, null, 5000, 15000);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw new Exception("Model fetch failed: HTTP " + response.statusCode + ": " + response.bodyAsUtf8());
+        }
+        Object payload = new JSONTokener(response.bodyAsUtf8()).nextValue();
+        Set<String> models = new LinkedHashSet<>();
+        if (payload instanceof JSONObject) {
+            JSONObject json = (JSONObject) payload;
+            addStringValues(json.optJSONArray("models"), models);
+            addModelIds(json.optJSONArray("data"), models);
+        } else if (payload instanceof JSONArray) {
+            JSONArray array = (JSONArray) payload;
+            addStringValues(array, models);
+            addModelIds(array, models);
+        } else {
+            throw new Exception("Model list returned an unexpected JSON payload.");
+        }
+        return new ArrayList<>(models);
+    }
+
+    public JSONObject sendChat(String query, String model) throws Exception {
         JSONObject payload = new JSONObject();
         payload.put("query", query == null ? "" : query.trim());
+        String selectedModel = model == null ? "" : model.trim();
+        if (!selectedModel.isEmpty()) {
+            payload.put("model", selectedModel);
+        }
         HttpResult response = sendHttpRequest(
                 "POST",
                 "/chat",
@@ -141,6 +172,34 @@ public class LmStudioApiClient {
             throw new Exception(action + ": HTTP " + response.statusCode + ": " + response.bodyAsUtf8());
         }
         return new JSONObject(response.bodyAsUtf8());
+    }
+
+    private void addStringValues(JSONArray array, Set<String> models) {
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < array.length(); i++) {
+            String value = array.optString(i, "").trim();
+            if (!value.isEmpty()) {
+                models.add(value);
+            }
+        }
+    }
+
+    private void addModelIds(JSONArray array, Set<String> models) {
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < array.length(); i++) {
+            JSONObject item = array.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            String modelId = item.optString("id", "").trim();
+            if (!modelId.isEmpty()) {
+                models.add(modelId);
+            }
+        }
     }
 
     private void writeUtf8(OutputStream outputStream, String value) throws Exception {
