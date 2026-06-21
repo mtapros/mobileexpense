@@ -102,6 +102,63 @@ class LmStudioClient:
             "created_at": datetime.now().isoformat(timespec="seconds"),
         }
 
+    def list_models(self) -> dict[str, Any]:
+        if not self.endpoint_url:
+            raise LmStudioClientError("LM Studio endpoint URL is required.")
+
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = "Bearer " + self.api_key
+
+        models_url = self._models_url()
+        http_request = urllib.request.Request(models_url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                raw_text = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            raise LmStudioClientError(f"LM Studio model list returned HTTP {error.code}: {body or error.reason}") from error
+        except urllib.error.URLError as error:
+            raise LmStudioClientError(f"Could not reach LM Studio model endpoint: {error.reason}") from error
+
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError as error:
+            raise LmStudioClientError(f"LM Studio model list did not return JSON: {raw_text[:500]}") from error
+
+        if not isinstance(payload, dict):
+            raise LmStudioClientError("LM Studio model list returned an unexpected JSON payload.")
+
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise LmStudioClientError("LM Studio model list response did not include a valid 'data' array.")
+
+        models: list[str] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id", "")).strip()
+            if model_id:
+                models.append(model_id)
+
+        return {
+            "ok": True,
+            "models": list(dict.fromkeys(models)),
+            "default_model": self.default_model,
+            "lm_studio_models_url": models_url,
+            "server_time": datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def _models_url(self) -> str:
+        endpoint = self.endpoint_url.rstrip("/")
+        if endpoint.endswith("/v1/chat/completions"):
+            return endpoint[:-len("/chat/completions")] + "/models"
+        if endpoint.endswith("/chat/completions"):
+            return endpoint[:-len("/chat/completions")] + "/models"
+        if endpoint.endswith("/v1"):
+            return endpoint + "/models"
+        return endpoint + "/v1/models"
+
     @staticmethod
     def _extract_answer(raw_response: dict[str, Any]) -> str:
         choices = raw_response.get("choices", []) if isinstance(raw_response, dict) else []
@@ -146,6 +203,14 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="query is required")
     try:
         return client.chat(request)
+    except LmStudioClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/models")
+async def models() -> dict[str, Any]:
+    try:
+        return client.list_models()
     except LmStudioClientError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

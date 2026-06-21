@@ -5,6 +5,7 @@ import android.net.Uri;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -18,8 +19,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 public class ReceiptApiClient {
@@ -52,9 +55,30 @@ public class ReceiptApiClient {
         return requireJsonObject(response, "Server check failed");
     }
 
-    public JSONObject uploadReceipt(ContentResolver resolver, Uri photoUri, String fileName) throws Exception {
+    public List<String> listModels() throws Exception {
+        HttpResult response = sendHttpRequest("GET", "/models", null, null, 5000, 15000);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw new Exception("Model fetch failed: HTTP " + response.statusCode + ": " + response.bodyAsUtf8());
+        }
+        Object payload = new JSONTokener(response.bodyAsUtf8()).nextValue();
+        Set<String> models = new LinkedHashSet<>();
+        if (payload instanceof JSONObject) {
+            JSONObject json = (JSONObject) payload;
+            addStringValues(json.optJSONArray("models"), models);
+            addModelIds(json.optJSONArray("data"), models);
+        } else if (payload instanceof JSONArray) {
+            JSONArray array = (JSONArray) payload;
+            addStringValues(array, models);
+            addModelIds(array, models);
+        } else {
+            throw new Exception("Model list returned an unexpected JSON payload.");
+        }
+        return new ArrayList<>(models);
+    }
+
+    public JSONObject uploadReceipt(ContentResolver resolver, Uri photoUri, String fileName, String model) throws Exception {
         String boundary = "ReceiptBoundary-" + UUID.randomUUID();
-        byte[] body = buildMultipartBody(resolver, photoUri, fileName, boundary);
+        byte[] body = buildMultipartBody(resolver, photoUri, fileName, model, boundary);
         HttpResult response = sendHttpRequest(
                 "POST",
                 "/receipts/upload",
@@ -166,8 +190,15 @@ public class ReceiptApiClient {
         return false;
     }
 
-    private byte[] buildMultipartBody(ContentResolver resolver, Uri photoUri, String fileName, String boundary) throws Exception {
+    private byte[] buildMultipartBody(ContentResolver resolver, Uri photoUri, String fileName, String model, String boundary) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
+        String selectedModel = model == null ? "" : model.trim();
+        if (!selectedModel.isEmpty()) {
+            writeUtf8(output, "--" + boundary + "\r\n");
+            writeUtf8(output, "Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+            writeUtf8(output, selectedModel);
+            writeUtf8(output, "\r\n");
+        }
         writeUtf8(output, "--" + boundary + "\r\n");
         writeUtf8(output, "Content-Disposition: form-data; name=\"file\"; filename=\"" + (fileName == null ? "receipt.jpg" : fileName) + "\"\r\n");
         writeUtf8(output, "Content-Type: image/jpeg\r\n\r\n");
@@ -237,6 +268,34 @@ public class ReceiptApiClient {
             throw new Exception("HTTP " + response.statusCode + ": " + response.bodyAsUtf8());
         }
         return new JSONObject(response.bodyAsUtf8());
+    }
+
+    private void addStringValues(JSONArray array, Set<String> models) {
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < array.length(); i++) {
+            String value = array.optString(i, "").trim();
+            if (!value.isEmpty()) {
+                models.add(value);
+            }
+        }
+    }
+
+    private void addModelIds(JSONArray array, Set<String> models) {
+        if (array == null) {
+            return;
+        }
+        for (int i = 0; i < array.length(); i++) {
+            JSONObject item = array.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            String modelId = item.optString("id", "").trim();
+            if (!modelId.isEmpty()) {
+                models.add(modelId);
+            }
+        }
     }
 
     private void writeUtf8(OutputStream outputStream, String value) throws Exception {
@@ -329,6 +388,7 @@ public class ReceiptApiClient {
     public static class ReceiptDetail {
         public final String receiptId;
         public final String filename;
+        public final String model;
         public final String status;
         public final String approvalStatus;
         public final String createdAt;
@@ -343,6 +403,7 @@ public class ReceiptApiClient {
         private ReceiptDetail(
                 String receiptId,
                 String filename,
+                String model,
                 String status,
                 String approvalStatus,
                 String createdAt,
@@ -356,6 +417,7 @@ public class ReceiptApiClient {
         ) {
             this.receiptId = receiptId;
             this.filename = filename;
+            this.model = model;
             this.status = status;
             this.approvalStatus = approvalStatus;
             this.createdAt = createdAt;
@@ -372,6 +434,7 @@ public class ReceiptApiClient {
             return new ReceiptDetail(
                     json.optString("receipt_id"),
                     json.optString("filename"),
+                    json.optString("model"),
                     json.optString("status"),
                     json.optString("approval_status"),
                     json.optString("created_at"),

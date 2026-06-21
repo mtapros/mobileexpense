@@ -106,6 +106,9 @@ public class ReceiptDetailActivity extends Activity {
         StringBuilder status = new StringBuilder();
         status.append("Status: ").append(emptyOrFallback(detail.status, "unknown"));
         status.append(" • Review: ").append(emptyOrFallback(detail.approvalStatus, "pending_review"));
+        if (detail.model != null && !detail.model.isEmpty()) {
+            status.append("\nModel: ").append(detail.model);
+        }
         if (detail.createdAt != null && !detail.createdAt.isEmpty()) {
             status.append("\nCreated: ").append(detail.createdAt);
         }

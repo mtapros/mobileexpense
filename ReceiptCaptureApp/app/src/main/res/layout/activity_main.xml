@@ -42,6 +42,24 @@
         android:layout_marginTop="10dp"
         android:text="Check Receipt Server" />
 
+    <EditText
+        android:id="@+id/modelEditText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:hint="Model (optional)"
+        android:inputType="text"
+        android:singleLine="true"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#98A2B3" />
+
+    <Button
+        android:id="@+id/fetchModelsButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Fetch Models" />
+
     <Button
         android:id="@+id/captureButton"
         android:layout_width="match_parent"

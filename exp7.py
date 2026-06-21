@@ -300,7 +300,13 @@ class ReceiptClient:
             raise ReceiptClientError(f"Model list returned HTTP {error.code}: {body or error.reason}") from error
         except urllib.error.URLError as error:
             raise ReceiptClientError(f"Could not reach model endpoint: {error.reason}") from error
-        data = payload.get("data", []) if isinstance(payload, dict) else []
+        except json.JSONDecodeError as error:
+            raise ReceiptClientError("Model list did not return valid JSON.") from error
+        if not isinstance(payload, dict):
+            raise ReceiptClientError("Model list returned an unexpected JSON payload.")
+        data = payload.get("data", [])
+        if not isinstance(data, list):
+            raise ReceiptClientError("Model list response did not include a valid 'data' array.")
         model_ids: list[str] = []
         for item in data:
             if isinstance(item, dict):
@@ -727,6 +733,7 @@ class ApiServerController:
             file = form.get("file")
             if file is None:
                 raise HTTPException(status_code=400, detail="Missing multipart file field 'file'")
+            selected_model = str(form.get("model") or "").strip()
 
             controller.log("/receipts/upload called")
             filename = getattr(file, "filename", None) or "receipt.jpg"
@@ -767,15 +774,39 @@ class ApiServerController:
                 "raw_result": None,
                 "review_notes": None,
                 "corrected_fields": {},
+                "model": selected_model or None,
                 "error": None,
             }
             with controller.lock:
                 controller.jobs[job_id] = dict(record)
             controller.store.upsert(record)
 
-            threading.Thread(target=controller._process_job, args=(job_id, str(save_path)), daemon=True).start()
+            threading.Thread(target=controller._process_job, args=(job_id, str(save_path), selected_model), daemon=True).start()
             controller.log(f"Accepted API upload: {filename} -> job {job_id}")
-            return {"job_id": job_id, "receipt_id": job_id, "status": "processing"}
+            return {"job_id": job_id, "receipt_id": job_id, "status": "processing", "model": selected_model or None}
+
+        @app.get("/models")
+        async def list_models():
+            config = controller.config_getter()
+            default_model = str(config.get("model", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+            client = ReceiptClient(
+                endpoint_url=config.get("endpoint_url", DEFAULT_ENDPOINT),
+                model=default_model,
+                api_key=config.get("api_key", ""),
+                timeout_seconds=int(config.get("timeout_seconds", 90)),
+                structured_output=bool(config.get("structured_output", True)),
+            )
+            try:
+                models = client.list_models()
+            except ReceiptClientError as error:
+                raise HTTPException(status_code=502, detail=str(error)) from error
+            return {
+                "ok": True,
+                "models": models,
+                "default_model": default_model,
+                "lm_studio_models_url": client._models_url(),
+                "server_time": datetime.now().isoformat(timespec="seconds"),
+            }
 
         @app.get("/jobs/{job_id}")
         async def get_job(job_id: str):
@@ -884,15 +915,20 @@ class ApiServerController:
 
         return app
 
-    def _process_job(self, job_id: str, image_path: str) -> None:
+    def _process_job(self, job_id: str, image_path: str, model_override: str = "") -> None:
         try:
             self.log(f"Starting job {job_id} for image {image_path}")
             config = self.config_getter()
             field_specs = [FieldSpec(item["name"], item.get("description", "")) for item in config.get("fields", DEFAULT_FIELDS)]
-            self.log(f"Job {job_id} config endpoint={config.get('endpoint_url', DEFAULT_ENDPOINT)!r} model={config.get('model', DEFAULT_MODEL)!r}")
+            selected_model = str(model_override or "").strip() or str(config.get("model", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
+            self.log(f"Job {job_id} config endpoint={config.get('endpoint_url', DEFAULT_ENDPOINT)!r} model={selected_model!r}")
+            with self.lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id]["model"] = selected_model
+            self.store.update(job_id, {"model": selected_model})
             client = ReceiptClient(
                 endpoint_url=config.get("endpoint_url", DEFAULT_ENDPOINT),
-                model=config.get("model", DEFAULT_MODEL),
+                model=selected_model,
                 api_key=config.get("api_key", ""),
                 timeout_seconds=int(config.get("timeout_seconds", 90)),
                 structured_output=bool(config.get("structured_output", True)),
@@ -906,11 +942,13 @@ class ApiServerController:
                     self.jobs[job_id]["processed_at"] = processed_at
                     self.jobs[job_id]["summary"] = summary
                     self.jobs[job_id]["raw_result"] = asdict(result)
+                    self.jobs[job_id]["model"] = result.model
             self.store.update(job_id, {
                 "status": "complete",
                 "processed_at": processed_at,
                 "summary": summary,
                 "raw_result": asdict(result),
+                "model": result.model,
             })
             self.log(f"Completed API job {job_id}")
         except Exception as error:
