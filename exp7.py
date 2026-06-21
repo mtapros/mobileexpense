@@ -127,6 +127,17 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
+def build_models_url(endpoint_url: str) -> str:
+    endpoint = endpoint_url.rstrip("/")
+    if endpoint.endswith("/v1/chat/completions"):
+        return endpoint[:-len("/chat/completions")] + "/models"
+    if endpoint.endswith("/chat/completions"):
+        return endpoint[:-len("/chat/completions")] + "/models"
+    if endpoint.endswith("/v1"):
+        return endpoint + "/models"
+    return endpoint + "/v1/models"
+
+
 def safe_quantity(value: Any) -> str:
     if value is None or str(value).strip() == "":
         return "1"
@@ -287,7 +298,7 @@ class ReceiptClient:
         self.structured_output = bool(structured_output)
 
     def list_models(self) -> list[str]:
-        models_url = self.models_url()
+        models_url = build_models_url(self.endpoint_url)
         headers = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -314,16 +325,6 @@ class ReceiptClient:
                 if model_id:
                     model_ids.append(model_id)
         return sorted(dict.fromkeys(model_ids))
-
-    def models_url(self) -> str:
-        endpoint = self.endpoint_url.rstrip("/")
-        if endpoint.endswith("/v1/chat/completions"):
-            return endpoint[:-len("/chat/completions")] + "/models"
-        if endpoint.endswith("/chat/completions"):
-            return endpoint[:-len("/chat/completions")] + "/models"
-        if endpoint.endswith("/v1"):
-            return endpoint + "/models"
-        return endpoint + "/v1/models"
 
     def extract_receipt(self, image_path: str, field_specs: list[FieldSpec], extra_instructions: str = "") -> ExtractionResult:
         if not image_path or not os.path.exists(image_path):
@@ -804,7 +805,7 @@ class ApiServerController:
                 "ok": True,
                 "models": models,
                 "default_model": default_model,
-                "lm_studio_models_url": client.models_url(),
+                "models_url": build_models_url(config.get("endpoint_url", DEFAULT_ENDPOINT)),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
             }
 

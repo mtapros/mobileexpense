@@ -145,7 +145,7 @@ class LmStudioClient:
             "ok": True,
             "models": list(dict.fromkeys(models)),
             "default_model": self.default_model,
-            "lm_studio_models_url": models_url,
+            "models_url": models_url,
             "server_time": datetime.now().isoformat(timespec="seconds"),
         }
 
