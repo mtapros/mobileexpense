@@ -37,9 +37,18 @@ public class LmStudioApiClient {
         return requireJsonObject(response, "Server check failed");
     }
 
-    public JSONObject sendChat(String query) throws Exception {
+    public JSONObject getModels() throws Exception {
+        HttpResult response = sendHttpRequest("GET", "/models", null, null, 5000, 30000);
+        return requireJsonObject(response, "Model polling failed");
+    }
+
+    public JSONObject sendChat(String query, String model) throws Exception {
         JSONObject payload = new JSONObject();
         payload.put("query", query == null ? "" : query.trim());
+        String normalizedModel = model == null ? "" : model.trim();
+        if (!normalizedModel.isEmpty()) {
+            payload.put("model", normalizedModel);
+        }
         HttpResult response = sendHttpRequest(
                 "POST",
                 "/chat",
