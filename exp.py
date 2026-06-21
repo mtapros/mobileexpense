@@ -142,6 +142,8 @@ async def health() -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> dict[str, Any]:
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="query is required")
     try:
         return client.chat(request)
     except LmStudioClientError as error:
