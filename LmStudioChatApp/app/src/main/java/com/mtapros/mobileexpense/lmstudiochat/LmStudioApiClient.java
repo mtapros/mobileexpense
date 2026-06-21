@@ -14,7 +14,6 @@ import java.util.Arrays;
 import java.util.Locale;
 
 public class LmStudioApiClient {
-    private static final String DEFAULT_SERVER_URL = "http://192.168.34.44:8001";
     private final LocalServer server;
 
     public LmStudioApiClient(String serverUrl) throws Exception {
@@ -55,7 +54,7 @@ public class LmStudioApiClient {
     private static LocalServer validatedServer(String value) throws Exception {
         String normalized = value == null ? "" : value.trim();
         if (normalized.isEmpty()) {
-            normalized = DEFAULT_SERVER_URL;
+            throw new Exception("Enter the chat server URL.");
         }
         if (!normalized.toLowerCase(Locale.US).startsWith("http://")) {
             normalized = "http://" + normalized;

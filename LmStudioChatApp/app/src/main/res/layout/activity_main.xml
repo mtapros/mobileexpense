@@ -27,11 +27,11 @@
         android:id="@+id/serverUrlEditText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:autofillHints=""
+        android:autofillHints="url"
         android:hint="Server URL"
         android:inputType="textUri"
         android:singleLine="true"
-        android:text="http://192.168.34.44:8001"
+        android:text="@string/default_server_url"
         android:textColor="#FFFFFF"
         android:textColorHint="#98A2B3" />
 

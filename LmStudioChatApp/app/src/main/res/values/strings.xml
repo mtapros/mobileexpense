@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">LM Studio Chat</string>
+    <string name="default_server_url">http://192.168.34.44:8001</string>
 </resources>
