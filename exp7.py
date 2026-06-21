@@ -287,7 +287,7 @@ class ReceiptClient:
         self.structured_output = bool(structured_output)
 
     def list_models(self) -> list[str]:
-        models_url = self._models_url()
+        models_url = self.models_url()
         headers = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -315,7 +315,7 @@ class ReceiptClient:
                     model_ids.append(model_id)
         return sorted(dict.fromkeys(model_ids))
 
-    def _models_url(self) -> str:
+    def models_url(self) -> str:
         endpoint = self.endpoint_url.rstrip("/")
         if endpoint.endswith("/v1/chat/completions"):
             return endpoint[:-len("/chat/completions")] + "/models"
@@ -804,7 +804,7 @@ class ApiServerController:
                 "ok": True,
                 "models": models,
                 "default_model": default_model,
-                "lm_studio_models_url": client._models_url(),
+                "lm_studio_models_url": client.models_url(),
                 "server_time": datetime.now().isoformat(timespec="seconds"),
             }
 

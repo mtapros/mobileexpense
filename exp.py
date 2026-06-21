@@ -124,7 +124,7 @@ class LmStudioClient:
         try:
             payload = json.loads(raw_text)
         except json.JSONDecodeError as error:
-            raise LmStudioClientError(f"LM Studio model list did not return JSON: {raw_text[:500]}") from error
+            raise LmStudioClientError("LM Studio model list did not return valid JSON.") from error
 
         if not isinstance(payload, dict):
             raise LmStudioClientError("LM Studio model list returned an unexpected JSON payload.")
